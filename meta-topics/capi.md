@@ -125,17 +125,6 @@ Datasets ARE used for targeting — they power custom audiences, lookalike audie
 - Cost per QUALIFIED lead goes DOWN (~15-20% improvement per Meta's data)
 - Lead volume decreases, quality increases significantly
 
-### Practical Timeline
-
-| Week | Action |
-|---|---|
-| **Week 0** | Connect CRM, start sending CAPI events |
-| **Week 0** | Backfill last 90 days of lead stage data if possible |
-| **Week 1-2** | Accumulate CRM events (need ~50/week minimum) |
-| **Week 2** | Create NEW campaigns with "Conversion Leads" optimization, same dataset |
-| **Week 2-5** | Run old + new campaigns in parallel. Don't touch the new ones (learning phase). |
-| **Week 5+** | Compare cost per QUALIFIED lead. Shift budget toward winner. |
-
 ### Prerequisites for Conversion Leads
 
 - **Minimum volumes:** ~50 conversion events per week per ad set, ~200-250 leads per month total
