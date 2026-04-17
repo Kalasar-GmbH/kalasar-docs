@@ -7,6 +7,7 @@ This repo contains research, guides, and reference material that any team member
 ## Structure
 
 - `meta-topics/` — Meta Ads platform: CAPI, Conversion Leads, datasets, pixels, optimization
+- `crm-topics/` — CRM platforms: Attio data model, HubSpot, Salesforce integration patterns
 
 ## When to add something here
 
