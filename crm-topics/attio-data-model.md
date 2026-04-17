@@ -54,11 +54,13 @@ Example — Kalasar's "Meta Inbound" list (parent: People):
 
 Both. It depends on how the customer uses Attio:
 
-1. **List-based pipeline** (more common, recommended by Attio): A list like "Meta Inbound" with its own stages. This is the modern, flexible approach. Lists can have custom fields like `meta_campaign`, `meta_ad_name`, `lead_quality`, `mrr_pipeline_value` that are specific to that workflow.
+1. **List-based pipeline** (more common, recommended by Attio): A list like "Meta Inbound" with its own stages. This is the modern, flexible approach. Lists can have custom fields like `meta_campaign`, `meta_ad_name`, `lead_quality`, `mrr_pipeline_value` that are specific to that workflow. Best for founder-led sales, simple processes, or channel-specific pipelines (e.g. Meta ad leads, recruiting, VC deal flow).
 
-2. **Deals-based pipeline**: The Deals object with its global stage attribute. More traditional CRM approach. Works well for companies that funnel everything through one sales process.
+2. **Deals-based pipeline**: The Deals object with its global stage attribute. More traditional CRM approach. Attio describes this as the ["scalable, robust" approach](https://www.attio.community/c/workshops-library/lists-vs-deals-how-to-build-your-sales-pipelines) for dedicated sales teams. Supports multiple concurrent deals per customer (new business, upsell, renewal) — something lists cannot do (a person can only be in one stage per list).
 
 3. **Both**: Some teams use a list for lead qualification (Meta Inbound → New Lead → Contacted → Call Booked) and then create a Deal when the lead becomes a real opportunity (Deal → Opportunity → PoV → Won). The list tracks the top of funnel, deals track the bottom.
+
+Attio's own guidance: start with a list for simple use cases; move to the Deals object when you need multiple opportunities per customer or complex sales reporting.
 
 For Kalasar's CRM connector, **both should be offered as pipeline options**. The user picks their pipeline, and we fetch the stages from wherever that pipeline lives.
 
@@ -148,9 +150,26 @@ As of April 2026:
 
 ## Sources
 
-- [Attio: Objects and Lists](https://docs.attio.com/docs/objects-and-lists)
-- [Attio: Connect an app through OAuth](https://docs.attio.com/rest-api/tutorials/connect-an-app-through-oauth)
-- [Attio: List all lists API](https://docs.attio.com/rest-api/endpoint-reference/lists/list-all-lists)
-- [Attio: List entries API](https://docs.attio.com/rest-api/endpoint-reference/entries/list-entries)
-- [Attio: Authentication guide](https://docs.attio.com/rest-api/guides/authentication)
-- [CRM.org: Attio Review](https://crm.org/news/attio-review) — "a pipeline isn't a separate module; it's just a list switched into kanban view"
+### Attio Official Documentation
+- [Objects and Lists](https://docs.attio.com/docs/objects-and-lists) — core data model explanation
+- [Define your data model: objects, lists, and views](https://attio.com/help/reference/attio-101/attios-data-model/define-your-data-model-objects-lists-and-views) — Attio Help Center overview
+- [Understanding lists](https://attio.com/help/reference/attio-101/attios-data-model/understanding-lists) — list concepts and usage patterns
+- [Connect an app through OAuth](https://docs.attio.com/rest-api/tutorials/connect-an-app-through-oauth) — OAuth setup tutorial with multiple redirect URIs
+- [Authentication guide](https://docs.attio.com/rest-api/guides/authentication) — scopes reference, token types
+- [Filtering and sorting](https://docs.attio.com/rest-api/guides/filtering-and-sorting) — query filter syntax (`$gte`, `$lt`, etc.)
+
+### Attio API Endpoint Reference
+- [List all lists](https://docs.attio.com/rest-api/endpoint-reference/lists/list-all-lists) — `GET /v2/lists`
+- [List entries (query)](https://docs.attio.com/rest-api/endpoint-reference/entries/list-entries) — `POST /v2/lists/{list}/entries/query`
+- [List attribute values for entry](https://developers.attio.com/reference/get_v2-lists-list-entries-entry-id-attributes-attribute-values) — per-entry attribute access
+- [List person record entries](https://docs.attio.com/rest-api/endpoint-reference/people/list-person-record-entries) — find which lists a person belongs to
+
+### Attio Community & Guides
+- [Lists vs Deals: How to build your sales pipelines](https://www.attio.community/c/workshops-library/lists-vs-deals-how-to-build-your-sales-pipelines) — Attio's own workshop on when to use which
+- [How to Use Lists vs. Deals in Attio](https://supademo.com/blog/guides/how-to-use-lists-vs-deals-in-attio/) — step-by-step comparison
+- [Mastering Lists and Views on Attio](https://novlini.io/blog/mastering-lists-and-views) — deep dive on list configuration
+
+### Third-Party References
+- [CRM.org: Attio Review 2026](https://crm.org/news/attio-review) — "a pipeline isn't a separate module; it's just a list switched into kanban view"
+- [ClonePartner: The Ultimate Guide to Attio CRM](https://clonepartner.com/blog/ultimate-guide-attio-crm-2025) — comprehensive platform overview
+- [Stacksync: Attio API Guide](https://www.stacksync.com/blog/how-to-get-an-attio-developer-account-and-start-working-with-attios-api) — developer account setup and authentication walkthrough
