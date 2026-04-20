@@ -131,7 +131,7 @@ Datasets ARE used for targeting — they power custom audiences, lookalike audie
 - **Events must happen within 28 days** of lead generation (Meta's attribution window)
 - **Conversion rate** for the target stage should be between 1% and 40%
 - **Meta Lead ID** must flow from webhook to CRM (this is `leadgen_id`)
-- **Events older than 7 days** are rejected by Meta
+- **Events older than 7 days** are rejected by Meta (see [Event Time Windows](#event-time-windows--the-7-day-rule) below for the full story and mitigation)
 
 ### What the Ad Set Looks Like
 
@@ -155,13 +155,86 @@ When creating a Conversion Leads campaign:
 
 Meta is being more selective about who sees the ad. Fewer junk leads, more real prospects.
 
+## Event Time Windows — The 7-Day Rule
+
+Meta's CAPI has strict timing rules on the `event_time` field. Getting this wrong is the #1 cause of CRM events silently failing to optimize campaigns, and it hits hardest on first-time CRM sync and on long B2B sales cycles.
+
+### The Rules
+
+- **Past limit:** `event_time` must be within **7 days** of the current time. Meta's own docs: *"The `event_time` can be up to 7 days before the time at which you send an event to Facebook."*
+- **Future limit:** `event_time` can be at most **1 hour** in the future.
+- **Batch-level rejection:** If a single event in a batch exceeds the 7-day window, Meta rejects the **entire batch**. No partial success.
+- **After lead generation only:** `event_time` must be *after* the lead's generation timestamp. You cannot report a qualification that happened before the lead existed.
+- **`lead_id` does not extend the window.** Having the Meta lead ID improves matching quality but does not bypass the 7-day rule.
+- **`action_source` makes no difference.** Whether you use `website`, `system_generated`, `offline`, or any other source, the 7-day limit applies uniformly.
+
+### The 90-Day Lead Retention Cliff
+
+Separate from the 7-day ingestion window: **Meta keeps lead records for 90 days**. After that, the lead is flushed from their system. Updates referencing leads older than 90 days are silently ignored for optimization, even if the API accepts the payload.
+
+Two cliffs in sequence:
+- **Day 7:** API rejects the event. Nothing lands.
+- **Day 90:** Even if you get the event through the gate (via clamping, below), Meta has no lead record to attribute it to.
+
+### Why Meta Has This Rule
+
+Three real reasons behind the 7-day window:
+
+1. **Click log retention.** Meta's hot attribution pipeline keeps ad click and impression data for roughly 7 days. After that, the click that drove the lead is no longer available for real-time matching in the normal attribution flow. (Match via `lead_id` still works, but it is a separate code path.)
+2. **Model freshness.** The ad optimizer retrains on recent conversions. Signals from 45+ days ago reflect stale creative, audience, and seasonality conditions, which would drift the model.
+3. **Deduplication window.** Meta dedupes events across a 7-day window. Beyond that, dedup state is flushed and duplicate risk rises.
+
+The rule makes sense for consumer e-commerce — click an ad, buy in hours or days. **It fits B2B reality badly.** Enterprise sales cycles routinely run 30–180 days, and the moment a customer qualifies or closes is often well outside Meta's window.
+
+### The First-Sync Problem
+
+This hits hardest on **initial CRM integration.** The customer has months of historical deals sitting in their CRM. We want to push that history to Meta so the optimizer learns quickly. But the 7-day rule means most of it bounces on arrival.
+
+Meta's official answer is to use Events Manager's **offline events CSV upload**, which has a 62-day window. That is a separate manual tool in the Meta UI, not something a CRM-CAPI integration can call programmatically.
+
+### Mitigation: The Clamp Approach
+
+A pragmatic workaround for events older than 7 days: **set `event_time` to roughly 6 days ago** (a safety margin inside the window), while keeping the correct lead match via `lead_id`.
+
+What happens in practice:
+
+- ✅ Meta accepts the event (passes the 7-day gate)
+- ✅ `lead_id` matching still attaches the conversion to the correct lead, ad, ad set, and campaign — for leads ≤90 days old
+- ✅ Conversion Leads optimization still learns which creative/audience produced qualified leads
+- ⚠️ Attribution date in Ads Manager reports will show ~6 days ago, not the real conversion date
+- ⚠️ Technically against Meta's stated rule (`event_time` should reflect reality). Low practical risk — Meta does not appear to penalize this, and it is common across CRM-CAPI integrations — but it is a rule bend
+
+**Clamp math must respect the "after lead generation" rule:**
+
+```
+event_time = max(lead.created_at + 1 second, now() - 6 days)
+```
+
+Otherwise you risk sending a timestamp that predates the lead itself, which Meta also rejects.
+
+### What NOT to Do
+
+- **Do not rewrite `event_time` to `now()`** for old events. That compresses months of CRM history into today, seriously misleading the optimizer about which creative produced which outcomes. Clamping to 6 days ago is a minor inaccuracy; rewriting to today is a large one.
+- **Do not submit events for leads older than 90 days via CAPI.** Meta no longer has the lead record, so the match fails silently downstream. These should be classified in the product UI as "truly unrecoverable," distinct from "expired but clampable."
+
+### The 7-Day vs. 90-Day Backfill Contradiction
+
+Meta's own product guidance says *"backfilling up to 90 days of CRM history helps the algorithm learn faster."* Meta's API docs say `event_time` is capped at 7 days. These two official statements contradict each other.
+
+The resolution:
+
+- **"Backfill 90 days"** is achievable only via the Events Manager offline events CSV import, not via CAPI.
+- **Via CAPI,** you either send events as they happen (ideal), or clamp older events into the 7-day window (pragmatic).
+
+Any integration that claims "automatic 90-day CAPI backfill" is either clamping behind the scenes or silently dropping most events. Be honest with customers about which of these is happening.
+
 ## Practical Considerations for Kalasar
 
 1. **Pixel/dataset selector is needed** — list existing datasets (including the auto-created Page one) and recommend picking the one already associated with their Lead Ads
 2. **No migration/switching logic needed** — customers create new campaigns for Conversion Leads, they don't modify existing ones
 3. **We should send MORE stages** — Meta recommends ALL pipeline stages (not just qualified + won) for better optimization
 4. **Onboarding should explain** that after connecting CRM + selecting the pixel, the customer needs to create new campaigns with the "Conversion Leads" objective in Ads Manager — we can't automate that part
-5. **Backfill is valuable** — sending historical lead stage data for the last 90 days helps Meta's algorithm learn faster
+5. **Backfill is valuable but constrained** — Meta's algorithm learns faster with historical data, but the CAPI enforces a 7-day `event_time` window. Full 90-day backfill is only possible via Events Manager CSV upload (manual). Via CAPI we either send events live or clamp older events into the window (see [Event Time Windows](#event-time-windows--the-7-day-rule))
 
 ## Sources
 
@@ -178,3 +251,7 @@ Meta is being more selective about who sees the ad. Fewer junk leads, more real 
 - [Transcend Digital: Meta Datasets vs Facebook Pixel](https://transcenddigital.com/blog/pixel-vs-dataset/)
 - [Privyr: Meta Conversions API for Lead Ads](https://help.privyr.com/knowledge-base/meta-conversions-api/)
 - [LeadSync: The Facebook Pixel and Meta Lead Ads](https://leadsync.me/blog/facebook-pixel-meta-lead-ads/)
+- [Meta Developers: Server Event Parameters (event_time constraints)](https://developers.facebook.com/docs/marketing-api/conversions-api/parameters/server-event/)
+- [AdsFox: CRM CAPI — Optimize Ads for Qualified Leads, Not Form Fills](https://adsfox.com/crm-capi/)
+- [Datahash: Meta CAPI for CRM (90-day lead retention)](https://www.datahash.com/docs/meta-capi-for-crm/)
+- [LiveRamp: The Meta Conversions API Program for Offline Conversions](https://docs.liveramp.com/connect/en/the-meta-conversions-api-for-offline-conversions.html)
