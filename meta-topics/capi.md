@@ -111,7 +111,7 @@ There is **no dataset switching on existing ad sets** needed. The migration is:
 
 ### Why Not Modify Existing Campaigns?
 
-Switching from "Maximize leads" to "Maximize conversion leads" on an existing ad set counts as a **significant edit** that resets the learning phase. Meta needs ~50 conversion events within 7 days to exit learning. It's cleaner to create new campaigns.
+Switching from "Maximize leads" to "Maximize conversion leads" on an existing ad set counts as a **significant edit** that resets the learning phase. Meta typically needs ~50 conversion events within 7 days for an ad set to exit learning — though per Meta's own hedge, this "can fluctuate based on campaign objective, budget, audience size, and competition." It's cleaner to create new campaigns.
 
 ### Datasets and Targeting
 
@@ -122,16 +122,108 @@ Datasets ARE used for targeting — they power custom audiences, lookalike audie
 **The targeting change with Conversion Leads is not about the dataset — it's about the optimization goal.** When you set "Maximize conversion leads":
 - Meta's algorithm learns which TYPES of people become qualified leads (not just which people submit forms)
 - Cost per raw lead goes UP (Meta is more selective)
-- Cost per QUALIFIED lead goes DOWN (~15-20% improvement per Meta's data)
+- Cost per QUALIFIED lead goes DOWN (~15-20% improvement per Meta's marketing claims)
 - Lead volume decreases, quality increases significantly
 
 ### Prerequisites for Conversion Leads
 
-- **Minimum volumes:** ~50 conversion events per week per ad set, ~200-250 leads per month total
-- **Events must happen within 28 days** of lead generation (Meta's attribution window)
-- **Conversion rate** for the target stage should be between 1% and 40%
-- **Meta Lead ID** must flow from webhook to CRM (this is `leadgen_id`)
-- **Events older than 7 days** are rejected by Meta (see [Event Time Windows](#event-time-windows--the-7-day-rule) below for the full story and mitigation)
+Two different gates apply here — third-party write-ups routinely conflate them. Separate them in your head before evaluating any customer.
+
+**Conversion Leads eligibility (CL-specific):**
+- **≥200–250 leads per month at the account / CRM-connection level.** Sources disagree: LeadsBridge cites 200 with a direct link to Meta's dev doc; Datahash and HighLevel cite 250 (likely a newer Meta revision). No public source scopes it verbatim (ad account vs. business), but the phrasing "Facebook must be generating…" implies account-level, not per ad set.
+- **Chosen stage has a 1–40% conversion rate.** Likely lead-to-stage; Meta doesn't publish the denominator verbatim. Treat as inferred.
+- **Chosen stage happens within 28 days of lead generation.** This is a stage-latency criterion for the CL integration. It is NOT Meta's ad attribution window (7-day click / 1-day view) and NOT the 7-day `event_time` ingestion gate below.
+- **Meta Lead ID must flow from webhook to CRM** (`leadgen_id`) and back out via CAPI as `user_data.lead_id`.
+- **Conversion Leads is only available for Instant Forms.** Not website lead forms, Messenger ads, or Calls.
+
+**Learning-phase rule (generic Meta, applies to Conversion Leads too):**
+- **~50 conversion events per ad set per 7 days** at the chosen stage to exit the learning phase. This is Meta's universal learning-phase floor — same rule as Purchase or any other optimization. Meta's own hedge: the number "can fluctuate based on campaign objective, budget, audience size, and competition." Below this, the ad set stays in "Learning Limited" — delivery continues but performance is more volatile.
+- **~30-day model-training window** precedes the standard 7-day learning phase for the CL ranking model specifically (per CustomerLabs, citing Meta). Total warm-up before results stabilize: roughly 37 days, not 7.
+
+**Event ingestion (applies to every CAPI event regardless of objective):**
+- **Events older than 7 days are rejected** by CAPI on the `event_time` field. See [Event Time Windows](#event-time-windows--the-7-day-rule) for the 7-day rule, the 90-day lead retention cliff, and the clamp mitigation.
+
+### When Conversion Leads is worth enabling
+
+The readiness question is not "are we eligible?" — it is "can we generate enough events at the chosen stage to exit learning phase on a single ad set?"
+
+**The readiness formula:**
+
+```
+(leads/month × lead-to-stage rate) / 4.3 weeks ≥ 50 events/week/ad set
+```
+
+Plus the Meta gates above (≥200–250 leads/month at the account level, chosen stage 1–40% rate, chosen stage ≤28 days from lead gen, Instant Forms only).
+
+The binding constraint in every realistic scenario is the **50 events/week/ad set learning-phase rule (~215/month/ad set)**. The 200–250 leads/month eligibility gate is rarely the bottleneck.
+
+#### Scenario A — Optimize on "Qualified"
+
+| Input | Value |
+|---|---|
+| Performance goal | "Maximize number of conversion leads" |
+| Selected stage | Qualified (e.g. completed 1st call, showed interest) |
+| Lead-to-Qualified rate | 25% (middle of Meta's 1–40% band) |
+| **Qualified events needed** | **≥50/week = ~215/month per ad set** |
+| **Minimum leads/month** | **~860** |
+| Ad sets | 1 (multi-ad-set multiplies the volume requirement linearly) |
+| Fits 28-day stage-latency? | Yes — 1st call typically happens within days |
+| Warm-up time | ~30 days model training + 7 days learning |
+
+**Verdict:** viable for businesses doing ~200 leads/week. This is the realistic CL target for most customers.
+
+#### Scenario B — Optimize on "Closed-Won"
+
+| Input | Value |
+|---|---|
+| Performance goal | "Maximize number of conversion leads" |
+| Selected stage | Closed-Won |
+| Lead-to-Won rate | 10% (realistic for short-cycle SMB services / online memberships) |
+| **Won events needed** | **≥50/week = ~215/month per ad set** |
+| **Minimum leads/month** | **~2,150** |
+| Ad sets | 1 |
+| Fits 28-day stage-latency? | **Only if sales cycle ≤28 days** — rules out most B2B |
+| Warm-up time | ~30 + 7 days |
+
+At a 2% Lead-to-Won rate (typical for higher-ticket B2B), the minimum leads/month balloons to ~10,750. Scenario B is feasible only for high-velocity, short-cycle funnels — online courses, memberships, low-ticket services.
+
+#### Scenario C — "Optimize for total revenue" (not a configuration Meta offers)
+
+**Meta does NOT offer a "Maximize value of conversion leads" performance goal.** Every credible source confirms only two performance goals exist for Lead Ads with Instant Forms: "Maximize number of leads" and "Maximize number of conversion leads." Both optimize for count of a chosen stage, not for revenue.
+
+The CAPI payload accepts `custom_data.value` and `currency`, but for Conversion Leads those drive **reporting only**, not bidding. Revenue-optimized bidding exists only under the Purchase objective (website checkout events, not CRM lead stages).
+
+Four closest substitutes, in order of realism:
+
+**C1. Optimize on Closed-Won, accept flat-count optimization.**
+Meta maximizes the *count* of wins. Revenue grows proportionally with win-count, but Meta does not favor high-value leads. Minimums = Scenario B (~2,150 leads/month at 10% Lead-to-Won).
+
+**C2. Optimize on Qualified, attach revenue for reporting only. (recommended for most customers)**
+Send `custom_data.value` + `currency` on downstream Closed-Won CAPI events. Meta still optimizes on Qualified count; the revenue attaches to Ads Manager reporting so you can see ROAS per creative/audience. Minimums = Scenario A (~860 leads/month at 25% Lead-to-Qualified).
+
+**C3. Layer Value Rules on top of "Maximize conversion leads" (advanced, unverified).**
+Value Rules are bid-adjustment modifiers for audience segments you define as high-value. Meta has extended Value Rules beyond Purchase, but **no public source verifies they work on the CL performance goal specifically.** Treat as unproven. If supported, requires Scenario A or B minimums plus enough per-segment volume to make bid adjustments meaningful.
+
+**C4. Switch objective entirely — Sales + Purchase event.**
+Not applicable for CRM-based lead-to-sale pipelines (phone sales, field sales, anything offline). Only fits e-commerce and self-serve SaaS where the sale happens on a web page.
+
+**Honest conclusion:** "Optimize Meta for revenue" on a CRM-connected Lead Ads setup is effectively not a setting you turn on. The practical recommendation for most customers is **C2** — optimize on Qualified, send revenue on downstream events for reporting, accept that Meta optimizes on count.
+
+#### Calibration against a real customer pipeline
+
+Example: 200 leads/month, 50 Qualified/month, 25 Sales/month, 1 ad set. Weekly equivalents: ~46 leads/week, ~12 qualified/week, ~6 sales/week.
+
+| Stage as optimization target | Meets 50/week/ad set? | Meets 1–40% rate? | Meets 28-day window? | Verdict |
+|---|---|---|---|---|
+| Qualified (12/week) | ❌ 24% of threshold | ✅ 25% | ✅ | **Eligible, but "Learning Limited"** |
+| Closed-Won (6/week) | ❌ 12% of threshold | ✅ 12.5% | ⚠️ 2nd call often >28d | **Do not optimize here** |
+| Revenue | **Not a Meta option** | — | — | **See C2** |
+
+**Recommendation for this customer:**
+- Optimize on **Qualified** — best of the available choices. Expect "Learning Limited" status.
+- **Keep the parallel Maximize Leads campaign running** — hedges against learning-phase volatility.
+- **Send all stages to Meta via CAPI**, including Closed-Won with `value` attached. Even when not the optimization target, downstream events feed Meta's ML and enable ROAS reporting.
+- **Do not expect the headline 15–20% CPQL / 44% quality improvement numbers.** Those are Meta's marketing claims for advertisers clearing the learning-phase threshold cleanly.
 
 ### What the Ad Set Looks Like
 
@@ -154,6 +246,8 @@ When creating a Conversion Leads campaign:
 | Lead-to-qualified conversion rate | ~21-44% increase |
 
 Meta is being more selective about who sees the ad. Fewer junk leads, more real prospects.
+
+**Caveat:** These figures come from Meta's own marketing materials (not independently audited research) and assume the ad set clears the 50/week/ad-set learning-phase threshold cleanly. "Learning Limited" ad sets below the threshold should not expect these gains.
 
 ## Event Time Windows — The 7-Day Rule
 
@@ -238,20 +332,25 @@ Any integration that claims "automatic 90-day CAPI backfill" is either clamping 
 
 ## Sources
 
+**Note on verifiability:** Meta's primary docs (`facebook.com/business/help/*` and `developers.facebook.com/docs/*`) are JavaScript-rendered and cannot be fetched programmatically — only page titles confirm existence. Specific claims attributed to Meta below are sourced via third-party Meta Business Partner docs (LeadsBridge, Datahash, HighLevel, CustomerLabs, Privyr) that quote Meta's wording. Where sources disagree (e.g. 200 vs. 250 leads/month), both are flagged in-text. For bulletproof verification, open the Meta pages in an authenticated Ads Manager session.
+
 - [Meta: Set Up Your CRM for Conversion Leads](https://www.facebook.com/business/help/279369167153556)
 - [Meta Developers: Conversion Leads Integration](https://developers.facebook.com/docs/marketing-api/conversions-api/conversion-leads-integration/)
 - [Meta Developers: Conversion Leads Payload Specification](https://developers.facebook.com/docs/marketing-api/conversions-api/conversion-leads-integration/payload-specification/)
 - [Meta Developers: Conversions API for CRM Platforms](https://developers.facebook.com/docs/marketing-api/conversions-api/guides/conversions-api-crm-for-platforms)
 - [Meta: About the Learning Phase](https://www.facebook.com/business/help/112167992830700)
+- [Meta: Conversion Lead Rate (metric definition)](https://www.facebook.com/business/help/1369576410311305)
 - [LeadsBridge: Conversion Leads Optimization on Facebook](https://leadsbridge.com/blog/conversion-leads-optimization-facebook/)
 - [Driftrock: Meta Conversion Leads Optimization](https://www.driftrock.com/features/meta-conversion-leads-optimization)
 - [HighLevel: Facebook Conversion Leads Walkthrough](https://help.gohighlevel.com/support/solutions/articles/48001233833-facebook-conversion-leads-walkthrough)
 - [GLO: Optimising Meta Ads for HubSpot CRM Conversion Events](https://generateleads.online/optimising-meta-campaigns-for-hubspot-crm-conversion-events/)
-- [Leadsie: What are Facebook Datasets?](https://www.leadsie.com/blog/all-you-need-to-know-about-facebook-metas-new-datasets)
+- [One PPC: Meta Lead Ads quantity vs. quality (performance-goal options)](https://oneppcagency.co.uk/facebook-ads/facebook-metas-leads-ads-optimisation-lead-quantity-vs-quality/)
+- [CustomerLabs: Conversion Lead Optimization Goal (30-day model-training window)](https://www.customerlabs.com/blog/conversion-lead-optimization-for-facebook-lead-ads/)
+- [CustomerLabs: Meta Ads Value Rules Optimization](https://www.customerlabs.com/blog/meta-ads-value-rules-optimization/)
+- [Leadsie: What are Facebook Datasets?](https://www.leadsie.com/blog/all-you-need-to-know-about-facebook-metas-new-datasets) (dataset ID = pixel ID)
 - [Transcend Digital: Meta Datasets vs Facebook Pixel](https://transcenddigital.com/blog/pixel-vs-dataset/)
 - [Privyr: Meta Conversions API for Lead Ads](https://help.privyr.com/knowledge-base/meta-conversions-api/)
 - [LeadSync: The Facebook Pixel and Meta Lead Ads](https://leadsync.me/blog/facebook-pixel-meta-lead-ads/)
 - [Meta Developers: Server Event Parameters (event_time constraints)](https://developers.facebook.com/docs/marketing-api/conversions-api/parameters/server-event/)
-- [AdsFox: CRM CAPI — Optimize Ads for Qualified Leads, Not Form Fills](https://adsfox.com/crm-capi/)
-- [Datahash: Meta CAPI for CRM (90-day lead retention)](https://www.datahash.com/docs/meta-capi-for-crm/)
+- [Datahash: Meta Conversion Leads Implementations (90-day lead retention)](https://www.datahash.com/docs/meta-conversion-leads-implementations/)
 - [LiveRamp: The Meta Conversions API Program for Offline Conversions](https://docs.liveramp.com/connect/en/the-meta-conversions-api-for-offline-conversions.html)
