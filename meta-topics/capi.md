@@ -54,6 +54,18 @@ The bridge is the **`lead_id`** (leadgen_id):
 
 **The pixel/dataset association matters too:** Events must go to a pixel/dataset associated with the same ad account that runs the Lead Ads. Meta uses BOTH the pixel association AND the lead_id to connect events to campaigns.
 
+### Match keys for Meta Lead Ads specifically
+
+Generic CAPI documentation recommends sending a "full match key set" of roughly 10 identifiers: `lead_id`, `em`, `ph`, `fn`, `ln`, `fbp`, `fbc`, `client_ip_address`, `client_user_agent`, `external_id`. **For Meta Lead Ads, half of that set is not available at all** — and it's a design choice, not a gap.
+
+The browser-side tracking fields — `fbp` (Facebook browser ID), `fbc` (Facebook click ID), `client_ip_address`, `client_user_agent` — are captured by the Meta Pixel at form-view time on a *website*. Meta Lead Ads run Instant Forms *inside Meta's own apps*, so there is no browser session, no pixel fire, and no click-through to track. Meta's leadgen webhook and Graph API lead endpoint both reflect this — they deliver `leadgen_id`, `form_id`, `ad_id`, `page_id`, `created_time`, and `field_data` (form answers). No browser tracking fields.
+
+**`lead_id` is Meta's deliberate replacement for those browser-side IDs.** The Conversion Leads integration was designed around the premise that Meta already knows which ad, ad set, and campaign produced each lead — `lead_id` is the server-side pointer into that. That's why Meta documents `lead_id` as the highest-priority match signal specifically for CL events.
+
+For Meta Lead Ads, the realistic full match-key set is: `lead_id` (primary) + `em` + `ph` + `fn` + `ln` + `external_id`. That's the ceiling — there is no extra EMQ lift available from adding browser fields that don't exist. If you also run website lead forms captured by your own pixel, those events *do* have browser fields and should include them; for Meta Lead Ads specifically, 6 keys is full.
+
+`external_id` is worth sending: a stable advertiser-side identifier (hashed) gives Meta a way to correlate multiple CAPI events for the same person over time, independent of `lead_id` — useful if the Lead record is eventually deleted but later events still reference the same contact.
+
 ## CAPI Payload for Conversion Leads
 
 For Conversion Leads, the CAPI payload has specific requirements:
@@ -67,6 +79,7 @@ For Conversion Leads, the CAPI payload has specific requirements:
     "event_id": "deal_001_qualified_1718371200",
     "user_data": {
       "lead_id": 99887766,
+      "external_id": ["sha256_hashed_internal_id"],
       "em": ["sha256_hashed_email"],
       "ph": ["sha256_hashed_phone"],
       "fn": ["sha256_hashed_first_name"],
@@ -306,6 +319,8 @@ event_time = max(lead.created_at + 1 second, now() - 6 days)
 
 Otherwise you risk sending a timestamp that predates the lead itself, which Meta also rejects.
 
+**Implemented in Kalasar's CAPI sender** (`backend/app/features/crm/capi.py`). Events with `event_timestamp` older than 7 days are clamped to 6 days ago (respecting the lead-gen floor); events whose underlying Meta Lead is older than 90 days are skipped entirely (past the retention cliff — Meta has no record to attribute to). See `_compute_event_time`.
+
 ### What NOT to Do
 
 - **Do not rewrite `event_time` to `now()`** for old events. That compresses months of CRM history into today, seriously misleading the optimizer about which creative produced which outcomes. Clamping to 6 days ago is a minor inaccuracy; rewriting to today is a large one.
@@ -329,6 +344,19 @@ Any integration that claims "automatic 90-day CAPI backfill" is either clamping 
 3. **We should send MORE stages** — Meta recommends ALL pipeline stages (not just qualified + won) for better optimization
 4. **Onboarding should explain** that after connecting CRM + selecting the pixel, the customer needs to create new campaigns with the "Conversion Leads" objective in Ads Manager — we can't automate that part
 5. **Backfill is valuable but constrained** — Meta's algorithm learns faster with historical data, but the CAPI enforces a 7-day `event_time` window. Full 90-day backfill is only possible via Events Manager CSV upload (manual). Via CAPI we either send events live or clamp older events into the window (see [Event Time Windows](#event-time-windows--the-7-day-rule))
+
+## What Kalasar's CAPI sender does today
+
+Implemented in `backend/app/features/crm/capi.py` and tested in `backend/tests/features/crm/test_capi.py`:
+
+- **Match keys sent**: `lead_id` (unhashed, plain integer), `external_id` (hashed `Lead.id` UUID), `em` (hashed email), `ph` (hashed phone), `fn` + `ln` (hashed first/last name). That's the realistic full set for Meta Lead Ads — see [Match keys for Meta Lead Ads specifically](#match-keys-for-meta-lead-ads-specifically) for why the browser fields aren't available.
+- **Event names**: `qualified_lead` for QUALIFIED stage, `closed_won` for WON stage — CRM-native names throughout, per Meta's recommendation to avoid colliding with the native `Lead` event.
+- **action_source**: `"system_generated"` on all events.
+- **custom_data**: `"lead_event_source": "Kalasar"` + `"event_source": "crm"` on every event; `value` + `currency` added on WON events (for ROAS reporting — Meta does not bid on value for Conversion Leads, see [Scenario C](#scenario-c--optimize-for-total-revenue-not-a-configuration-meta-offers)).
+- **event_id**: deterministic `{deal_source_id}_{stage_raw}_{original_event_timestamp}` — stable across retries even when `event_time` is clamped.
+- **event_time handling**: events ≤7 days old are sent as-is; events 7–90 days old are clamped to 6 days ago (respecting the lead-gen floor); events for Meta Leads older than 90 days are skipped entirely.
+- **Eligible events**: only HIGH + MEDIUM attribution confidence (set by `attribution.py`) — LOW confidence (name-match only) is tracked for reporting but not forwarded to Meta.
+- **Idempotency**: `CrmEvent.capi_sent` flag prevents resend; errors are recorded to `capi_error` without flipping the flag so retries happen naturally on the next sync cycle.
 
 ## Sources
 
